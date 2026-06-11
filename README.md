@@ -1,14 +1,58 @@
 # agent-runtime · OpenCode Runtime 镜像
 
-`agent-runtime` 是 `agent-control` 调度用户 Runtime 时使用的 OpenCode 镜像构建仓库。
+> OpenCode Runtime 镜像构建仓库：为 `agent-control` 创建用户级 Runtime Deployment 提供标准容器镜像。
 
-它的目标很单一：构建一个可以被 `agent-control` 创建为 Kubernetes Deployment 的 Runtime 镜像。镜像启动后运行 OpenCode Web，并暴露 `4096` 端口给 `agent-control` 代理访问。
+## 1. 定位与目标
 
-## 官方依据
+`agent-runtime` 是 `agent-control` 调度用户 Runtime 时使用的 OpenCode 镜像构建仓库。它不负责 Runtime 调度、用户鉴权、Redis 租约、Kubernetes 资源管理或 Agent API 代理。
 
-OpenCode 官方文档里和本镜像有关的点有三类。
+一句话定位：
 
-### 1. 安装方式
+- 提供可被 Kubernetes Deployment 启动的 OpenCode Runtime 镜像。
+- 固定以 OpenCode Web 模式监听 `4096` 端口。
+- 提供镜像内默认 `/app` 项目骨架，作为本地运行和默认兜底示例。
+- 真实部署时由 `agent-control` 按用户挂载 NAS 工作目录和预设 scene 配置。
+
+设计目标：
+
+- 镜像稳定，配置外置。
+- Runtime 容器监听 `0.0.0.0:4096`，供 Kubernetes Service 访问。
+- 默认项目结构遵循 OpenCode 官方项目级配置目录约定。
+- 不把真实用户数据、真实凭证、私有 plugins、私有 skills、私有 tools 或业务配置烘进镜像。
+
+## 2. 总体架构关系
+
+`agent-control` 负责控制面，`agent-runtime` 只负责运行面镜像。
+
+```mermaid
+graph TD
+    CONTROL["agent-control"]
+    K8S["Kubernetes"]
+    DEPLOY["Runtime Deployment 1 副本"]
+    SVC["Runtime Service"]
+    IMAGE["agent-runtime 镜像"]
+    NAS["NAS 用户目录与 scene 配置"]
+    OPENCODE["OpenCode Web"]
+
+    CONTROL --> K8S
+    K8S --> DEPLOY
+    DEPLOY --> IMAGE
+    DEPLOY --> NAS
+    DEPLOY --> OPENCODE
+    DEPLOY --> SVC
+    CONTROL --> SVC
+```
+
+边界划分：
+
+| 仓库 | 职责 | 不负责 |
+|---|---|---|
+| `agent-control` | Runtime 生命周期、多集群调度、Redis 租约、Deployment + Service、Agent API 代理、NAS 挂载渲染 | OpenCode 镜像构建 |
+| `agent-runtime` | OpenCode Runtime 镜像、默认 `/app` 项目骨架、启动命令和基础工具 | 调度、鉴权、Redis、Kubernetes 控制面、代理逻辑 |
+
+## 3. 官方依据
+
+### 3.1 安装方式
 
 OpenCode 支持通过 npm 安装：
 
@@ -16,58 +60,82 @@ OpenCode 支持通过 npm 安装：
 npm install -g opencode-ai
 ```
 
-本镜像使用这个方式安装 OpenCode CLI。
+本镜像使用该方式安装 OpenCode CLI。
 
-### 2. Web 启动方式
+### 3.2 Web 启动方式
 
-OpenCode Web 可以通过以下方式指定监听端口和地址：
+OpenCode Web 使用以下命令指定监听端口和地址：
 
 ```bash
 opencode web --port 4096 --hostname 0.0.0.0
 ```
 
-本镜像必须使用 Web 模式启动，不使用 `opencode serve`。
+本镜像固定使用 Web 模式启动，不使用 `opencode serve`。
 
-原因：本 Runtime 需要加载并运行项目级 OpenCode 配置中的 plugins；`serve` 模式不会加载运行项目级配置的 plugins。
+原因：本 Runtime 需要加载运行项目级 OpenCode 配置中的 plugins；`serve` 模式不作为本镜像默认启动模式。
 
-### 3. 项目级配置目录
+### 3.3 项目级配置目录
 
-OpenCode 支持项目级配置和 `.opencode/` 目录。项目级目录使用复数子目录，例如：
+OpenCode 项目级配置位于项目根目录下的 `.opencode/`，本仓库提供以下最小骨架：
 
 ```text
-.opencode/agents/
-.opencode/commands/
-.opencode/modes/
-.opencode/plugins/
-.opencode/skills/
-.opencode/tools/
-.opencode/themes/
+.opencode/
+├── opencode.json
+├── agents/
+├── commands/
+├── modes/
+├── plugins/
+├── skills/
+├── tools/
+└── themes/
 ```
 
-本仓库按这个结构提供最小项目级配置骨架。
 
-## 镜像构建思路
+## 4. 镜像构建与启动
 
-本 Runtime 镜像做四件事：
+镜像构建逻辑：
 
-1. 基于 Node.js 镜像提供 Node / npm 环境。
+1. 基于 Node.js 22 slim 镜像提供 Node / npm 环境。
 2. 安装 Python 3、pip、venv、Git、curl、bash、CA 证书等基础工具。
 3. 使用 `npm install -g opencode-ai` 安装 OpenCode。
-4. 将本仓库中的 `AGENTS.md` 和 `.opencode/` 复制到容器 `/app`，并以 Web 模式启动 OpenCode。
+4. 将仓库内默认 `AGENTS.md` 和 `.opencode/` 复制到容器 `/app`。
+5. 暴露 `4096` 端口，并以 OpenCode Web 模式启动。
 
-容器内默认项目目录是：
+关键 Dockerfile 片段：
+
+```dockerfile
+FROM docker.1ms.run/library/node:22-slim
+
+RUN npm install -g opencode-ai
+
+WORKDIR /app
+COPY .opencode/opencode.json .opencode/
+COPY .opencode/agents/ .opencode/agents/
+COPY .opencode/commands/ .opencode/commands/
+COPY .opencode/modes/ .opencode/modes/
+COPY .opencode/plugins/ .opencode/plugins/
+COPY .opencode/skills/ .opencode/skills/
+COPY .opencode/tools/ .opencode/tools/
+COPY .opencode/themes/ .opencode/themes/
+COPY AGENTS.md .
+
+EXPOSE 4096
+CMD ["opencode", "web", "--port", "4096", "--hostname", "0.0.0.0"]
+```
+
+容器内默认项目目录：
 
 ```text
 /app
 ```
 
-容器启动命令是：
+容器启动命令：
 
 ```bash
 opencode web --port 4096 --hostname 0.0.0.0
 ```
 
-## 仓库结构
+## 5. 仓库结构
 
 ```text
 .
@@ -76,7 +144,7 @@ opencode web --port 4096 --hostname 0.0.0.0
 ├── README.md
 ├── .dockerignore
 ├── .gitignore
-└── .opencode
+└── .opencode/
     ├── opencode.json
     ├── agents/
     ├── commands/
@@ -89,80 +157,191 @@ opencode web --port 4096 --hostname 0.0.0.0
 
 说明：
 
-- `AGENTS.md` 是镜像内默认项目的规则示例，会被复制到容器 `/app/AGENTS.md`。
-- `.opencode/opencode.json` 是本镜像参照 `feishu-bot` 模式提供的 OpenCode 项目级配置入口示例。
+- `AGENTS.md` 是镜像内默认项目的规则示例，Docker 构建时复制到容器 `/app/AGENTS.md`。
+- `.opencode/opencode.json` 是默认项目级 OpenCode 配置入口示例。
 - `.opencode/agents/`、`.opencode/commands/`、`.opencode/modes/`、`.opencode/plugins/`、`.opencode/skills/`、`.opencode/tools/`、`.opencode/themes/` 是 OpenCode 项目级配置目录。
-- `reminders/` 不是 OpenCode 官方项目级配置目录；它是特定插件可能产生或使用的运行时目录。本仓库不把 `reminders/` 作为默认结构提交。
-- 本仓库不保存真实用户工作区，不保存真实凭证，不保存私有业务配置。
+- 镜像内默认 `/app` 会在真实 Runtime Deployment 中被用户根目录挂载覆盖，这是预期行为。
 
-## 和 agent-control 的关系
+## 6. 与 agent-control 的运行契约
 
-`agent-control` 负责：
+### 6.1 Runtime 归属
 
-- 按用户创建 Runtime Deployment。
-- 创建 Runtime Service。
-- 维护 Redis 状态和租约。
-- 代理 HTTP / SSE 请求。
-- 管理用户和 Runtime 的绑定关系。
+Runtime 实例由 `agent-control` 按用户创建和复用：
 
-`agent-runtime` 只负责提供 Deployment 使用的容器镜像。
-
-Runtime 实例跟用户绑定，不跟 scene 绑定。
-
-## Dockerfile 做了什么
-
-当前 Dockerfile 的关键步骤：
-
-```dockerfile
-FROM docker.1ms.run/library/node:22-slim
+```text
+userId -> Runtime
 ```
 
-使用 Node 22 slim 作为基础镜像。
+Runtime 不按 scene 创建，scene 不参与 Runtime Redis Key、Deployment、Service、镜像选择或调度均衡。
 
-```dockerfile
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        bash \
-        ca-certificates \
-        curl \
-        git \
-        python3 \
-        python3-pip \
-        python3-venv \
-    && rm -rf /var/lib/apt/lists/*
+### 6.2 容器内目录契约
+
+真实部署时，`agent-control` 创建 Runtime Deployment，并按以下规则挂载：
+
+```text
+{runtime.workdir}/{userId} -> /app
+{runtime.scenes.<scene>}/AGENTS.md -> /app/{scene}/AGENTS.md
+{runtime.scenes.<scene>}/.opencode -> /app/{scene}/.opencode
 ```
 
-安装 Runtime 内常用基础工具。
+容器内最终形态：
 
-```dockerfile
-RUN npm install -g opencode-ai
+```text
+/app/
+├── AGENTS.md
+├── .opencode/
+└── {scene}/
+    ├── AGENTS.md
+    ├── .opencode/
+    └── ... 用户工作文件与运行产物
 ```
 
-按官方 npm 方式安装 OpenCode。
+### 6.3 用户默认配置
 
-```dockerfile
-WORKDIR /app
-COPY .opencode/opencode.json .opencode/
-COPY .opencode/agents/ .opencode/agents/
-COPY .opencode/commands/ .opencode/commands/
-COPY .opencode/modes/ .opencode/modes/
-COPY .opencode/plugins/ .opencode/plugins/
-COPY .opencode/skills/ .opencode/skills/
-COPY .opencode/tools/ .opencode/tools/
-COPY .opencode/themes/ .opencode/themes/
-COPY AGENTS.md .
+用户默认项目配置来自用户根目录：
+
+```text
+{runtime.workdir}/{userId}/AGENTS.md
+{runtime.workdir}/{userId}/.opencode/
 ```
 
-把默认项目规则和项目级 OpenCode 配置复制到容器 `/app`。
+根挂载后自然成为：
 
-```dockerfile
-EXPOSE 4096
-CMD ["opencode", "web", "--port", "4096", "--hostname", "0.0.0.0"]
+```text
+/app/AGENTS.md
+/app/.opencode/
 ```
 
-暴露 Runtime 端口，并以 Web 模式启动。
+用户默认 `.opencode/` 可以包含完整 OpenCode 项目级配置：
 
-## 构建和验证
+```text
+opencode.json
+agents/
+commands/
+modes/
+plugins/
+skills/
+tools/
+themes/
+```
+
+### 6.4 预设 scene 配置
+
+平台统一管理的预设 scene 配置来自：
+
+```text
+{runtime.scenes.<scene>}/AGENTS.md
+{runtime.scenes.<scene>}/.opencode/
+```
+
+挂载到：
+
+```text
+/app/{scene}/AGENTS.md
+/app/{scene}/.opencode/
+```
+
+scene `.opencode/` 只承接约束材料，建议包含：
+
+```text
+opencode.json
+agents/
+skills/
+tools/
+```
+
+scene `.opencode/` 不放：
+
+```text
+plugins/
+commands/
+modes/
+```
+
+### 6.5 会话目录
+
+`agent-control` 代理 OpenCode 创建会话时，将请求体扩展参数 `scene` 转换为 OpenCode 官方 `directory` query 参数：
+
+```text
+scene -> directory=/app/{scene}
+```
+
+示例：
+
+```http
+POST /session?directory=/app/coding
+```
+
+`agent-runtime` 不处理 `scene` 字段；`scene` 的校验、转换和移除由 `agent-control` 完成。
+
+### 6.6 动态能力安装与重启
+
+动态安装用户级 skills / tools / plugins 时，推荐写入用户默认项目配置目录：
+
+```text
+{runtime.workdir}/{userId}/.opencode/skills/
+{runtime.workdir}/{userId}/.opencode/tools/
+{runtime.workdir}/{userId}/.opencode/plugins/
+```
+
+容器内对应：
+
+```text
+/app/.opencode/skills/
+/app/.opencode/tools/
+/app/.opencode/plugins/
+```
+
+OpenCode Web 需要重启后才能稳定重新加载项目级配置。重启由 `agent-control` 提供的当前用户 Runtime 重启接口完成：
+
+```http
+POST /api/v1/runtime/restart
+```
+
+`agent-runtime` 不在容器内提供自重启控制接口，不负责管理 OpenCode 进程重启策略。
+
+### 6.7 挂载前置路径
+
+Runtime 创建或重启前，`agent-control` 的初始化流程必须确保以下路径存在：
+
+```text
+{runtime.workdir}/{userId}/
+{runtime.workdir}/{userId}/AGENTS.md
+{runtime.workdir}/{userId}/.opencode/
+{runtime.workdir}/{userId}/{scene}/
+{runtime.scenes.<scene>}/AGENTS.md
+{runtime.scenes.<scene>}/.opencode/
+```
+
+`agent-runtime` 镜像不负责创建 NAS 目录，不负责初始化用户工作区，不负责管理预设 scene 源目录。
+
+## 7. Kubernetes 部署建议
+
+`agent-runtime` 镜像内置的 `/app`、`AGENTS.md` 和 `.opencode/` 只作为默认示例。真实部署时，`agent-control` 通过 Kubernetes volume / volumeMount 注入用户工作目录与预设 scene 配置。
+
+Deployment 必须满足：
+
+- 容器镜像使用 `agent-runtime`。
+- 容器端口为 `4096`。
+- 容器监听地址为 `0.0.0.0`。
+- 启动命令为 `opencode web --port 4096 --hostname 0.0.0.0`。
+- 由 Kubernetes Service 暴露给 `agent-control` 代理访问。
+- 真实凭证通过 Secret、环境变量或受控挂载文件注入。
+- 用户目录、用户默认配置和预设 scene 配置通过 volume / volumeMount 注入。
+
+建议安全上下文：
+
+```yaml
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+```
+
+如果业务确认 OpenCode、插件和挂载目录都不需要 root 权限，可以进一步配置 `runAsNonRoot: true`、`runAsUser`、`runAsGroup`。如果启用 `readOnlyRootFilesystem: true`，需要为 OpenCode 工作目录、临时目录、插件运行目录和用户 workdir 提供可写 volume。
+
+## 8. 构建与验证
 
 构建镜像：
 
@@ -185,50 +364,15 @@ docker run --rm agent-runtime:local opencode --version
 docker run --rm -p 4096:4096 agent-runtime:local
 ```
 
-如果需要给 OpenCode 配置真实模型或供应商凭证，应在运行时通过环境变量、Secret 或挂载文件注入，不写入镜像和仓库。
+健康检查：
 
-## Kubernetes 部署建议
-
-镜像内置的 `.opencode/` 只作为默认示例配置。真实部署时，建议由 `agent-control` 创建 Runtime Deployment，并通过 Kubernetes 配置能力替换或挂载实际项目配置。
-
-推荐方式：
-
-- 用 ConfigMap 挂载非敏感配置，例如 `/app/.opencode/opencode.json`。
-- 用 ConfigMap 或只读卷挂载项目级 plugins、skills、agents、commands、modes、tools、themes。
-- 用 Secret 注入模型供应商凭证、插件凭证和其它敏感参数。
-- 用环境变量或 Secret 文件提供 OpenCode 所需的真实访问凭证。
-- 不把真实配置、真实凭证、用户数据或私有插件烘进镜像。
-
-示例挂载目标：
-
-```text
-/app/.opencode/opencode.json
-/app/.opencode/plugins/
-/app/.opencode/skills/
-/app/.opencode/agents/
-/app/.opencode/commands/
-/app/.opencode/modes/
-/app/.opencode/tools/
-/app/.opencode/themes/
+```bash
+curl -fsS http://127.0.0.1:4096/global/health
 ```
 
-这样可以保持镜像稳定，把不同用户、不同环境、不同项目的 Runtime 配置交给 Kubernetes ConfigMap、Secret 和 volumeMount 管理。
+## 9. 安全边界
 
-建议在 Runtime Deployment 中显式配置容器安全上下文：
-
-```yaml
-securityContext:
-  allowPrivilegeEscalation: false
-  capabilities:
-    drop:
-      - ALL
-```
-
-如果业务确认 OpenCode、插件和挂载目录都不需要 root 权限，可以进一步配置 `runAsNonRoot: true`、`runAsUser`、`runAsGroup`。如果启用 `readOnlyRootFilesystem: true`，需要为 OpenCode 工作目录、临时目录、插件运行目录和用户 workdir 提供可写 volume。
-
-## 安全边界
-
-不要提交：
+仓库和镜像不保存：
 
 - 接口密钥、Token、Cookie、账号密码或密钥。
 - `.env` 文件。
@@ -236,3 +380,28 @@ securityContext:
 - 证书或私钥。
 - 真实用户工作区数据。
 - 私有 plugins、skills、tools 或业务配置。
+- 客户材料、内部地址或未公开指标。
+
+真实模型供应商凭证、插件凭证和业务凭证应在运行时通过 Kubernetes Secret、受控环境变量或受控挂载文件注入。
+
+## 10. 设计边界
+
+`agent-runtime` 负责：
+
+- OpenCode Runtime 镜像构建。
+- 默认 `/app` 项目骨架。
+- OpenCode Web 启动命令。
+- 基础工具环境。
+
+`agent-runtime` 不负责：
+
+- Runtime 创建、查询、关闭。
+- 用户鉴权或 `x-user-id` 注入。
+- Redis 状态、租约和 TTL。
+- Kubernetes 多集群调度。
+- Deployment / Service 创建和删除。
+- Agent API 代理。
+- `scene` 校验和 `directory=/app/{scene}` 转换。
+- NAS 用户目录和预设 scene 源目录初始化。
+
+这些能力由 `agent-control` 承接。

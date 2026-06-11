@@ -29,6 +29,11 @@
 - Runtime 实例由 `agent-control` 按用户创建和管理。
 - Runtime 实例跟用户绑定，不跟 scene 绑定。
 - 当前项目规则只约束容器内 OpenCode 助手行为，不参与 `agent-control` 的调度决策。
+- 真实部署时，`agent-control` 将 `{runtime.workdir}/{userId}` 挂载到容器 `/app`，镜像内默认 `/app` 被用户根目录覆盖是预期行为。
+- 用户默认配置来自 `{runtime.workdir}/{userId}/AGENTS.md` 和 `{runtime.workdir}/{userId}/.opencode/`。
+- 用户 scene 工作目录来自 `{runtime.workdir}/{userId}/{scene}/`，容器内对应 `/app/{scene}/`，并作为 OpenCode 会话 `directory=/app/{scene}`。
+- 预设 scene 配置来自 `{runtime.scenes.<scene>}/AGENTS.md` 和 `{runtime.scenes.<scene>}/.opencode/`，分别挂载到 `/app/{scene}/AGENTS.md` 和 `/app/{scene}/.opencode/`。
+- `scene` 字段由 `agent-control` 校验并转换为 OpenCode 官方 `directory` query 参数；Runtime 内不处理 `scene` 字段。
 
 ## OpenCode 配置
 
@@ -49,6 +54,9 @@
 - `.opencode/tools/`
 - `.opencode/themes/`
 
-`reminders/` 不是 OpenCode 官方项目级配置目录；它是特定插件可能产生或使用的运行时目录，不应作为默认项目结构依赖。
 
-修改 plugins、skills 或 `opencode.json` 后，需要重启 OpenCode Web 才能确保配置重新加载。
+用户默认 `.opencode/` 可以包含完整项目级配置；预设 scene `.opencode/` 只承接 `opencode.json`、`agents/`、`skills/`、`tools/` 等约束材料，不放 `plugins/`、`commands/`、`modes/`。
+
+动态安装用户级 skills、tools 或 plugins 时，优先写入用户默认项目配置目录 `/app/.opencode/` 下的对应子目录。修改 plugins、skills、tools 或 `opencode.json` 后，需要通过 `agent-control` 的 `POST /api/v1/runtime/restart` 重启当前用户 Runtime，确保 OpenCode Web 重新加载配置。
+
+`agent-runtime` 不在容器内提供自重启控制接口，不负责管理 OpenCode 进程重启策略。
