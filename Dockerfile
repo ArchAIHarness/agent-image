@@ -19,14 +19,8 @@ RUN apt-get update \
 RUN npm install -g opencode-ai
 
 WORKDIR /app
+RUN mkdir -p .opencode
 COPY .opencode/opencode.json .opencode/
-COPY .opencode/agents/ .opencode/agents/
-COPY .opencode/commands/ .opencode/commands/
-COPY .opencode/modes/ .opencode/modes/
-COPY .opencode/plugins/ .opencode/plugins/
-COPY .opencode/skills/ .opencode/skills/
-COPY .opencode/tools/ .opencode/tools/
-COPY .opencode/themes/ .opencode/themes/
 COPY AGENTS.md .
 
 EXPOSE 4096

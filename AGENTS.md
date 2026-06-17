@@ -27,13 +27,14 @@
 ## Runtime 边界
 
 - Runtime 实例由 `agent-master` 按用户创建和管理。
-- Runtime 实例跟用户绑定，不跟 scene 绑定。
+- Runtime 实例跟用户绑定，一个用户一个实例。
 - 当前项目规则只约束容器内 OpenCode 助手行为，不参与 `agent-master` 的调度决策。
-- 真实部署时，`agent-master` 将 `{runtime.workdir}/{userId}` 挂载到容器 `/app`，镜像内默认 `/app` 被用户根目录覆盖是预期行为。
-- 用户默认配置来自 `{runtime.workdir}/{userId}/AGENTS.md` 和 `{runtime.workdir}/{userId}/.opencode/`。
-- 用户 scene 工作目录来自 `{runtime.workdir}/{userId}/{scene}/`，容器内对应 `/app/{scene}/`，并作为 OpenCode 会话 `directory=/app/{scene}`。
-- 预设 scene 配置来自 `{runtime.scenes.<scene>}/AGENTS.md` 和 `{runtime.scenes.<scene>}/.opencode/`，分别挂载到 `/app/{scene}/AGENTS.md` 和 `/app/{scene}/.opencode/`。
-- `scene` 字段由 `agent-master` 校验并转换为 OpenCode 官方 `directory` query 参数；Runtime 内不处理 `scene` 字段。
+- 真实部署时，`agent-master` 将 `{runtime.workdir}/{userId}/runtime` subPath 挂载到容器 `/app`，镜像内默认 `/app` 被用户工作目录覆盖是预期行为。
+- 整个 `{runtime.workdir}/{userId}/global` subPath 挂载到容器 `~`，正好匹配 OpenCode 默认查找路径：
+  - `global/.config/opencode` → `~/.config/opencode` (OpenCode 全局配置)
+  - `global/.local/share/opencode` → `~/.local/share/opencode` (OpenCode 全局数据: auth.json、会话等)
+  - `global/.cache/opencode` → `~/.cache/opencode` (provider 包和插件缓存)
+- 用户默认配置来自 `{runtime.workdir}/{userId}/runtime/AGENTS.md` 和 `{runtime.workdir}/{userId}/runtime/.opencode/`。
 
 ## OpenCode 配置
 
@@ -53,9 +54,6 @@
 - `.opencode/skills/`
 - `.opencode/tools/`
 - `.opencode/themes/`
-
-
-用户默认 `.opencode/` 可以包含完整项目级配置；预设 scene `.opencode/` 只承接 `opencode.json`、`agents/`、`skills/`、`tools/` 等约束材料，不放 `plugins/`、`commands/`、`modes/`。
 
 动态安装用户级 skills、tools 或 plugins 时，优先写入用户默认项目配置目录 `/app/.opencode/` 下的对应子目录。修改 plugins、skills、tools 或 `opencode.json` 后，需要通过 `agent-master` 的 `POST /api/v1/runtime/restart` 重启当前用户 Runtime，确保 OpenCode Web 重新加载配置。
 
