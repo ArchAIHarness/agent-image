@@ -1,6 +1,6 @@
 # AGENTS.md · 默认 Runtime 项目示例
 
-本文件是 `agent-runtime` 镜像内默认项目的规则示例。Docker 构建时会复制到容器 `/app/AGENTS.md`，供 OpenCode Web 启动后读取。
+本文件是 `agent-image` 镜像内默认项目的规则示例。Docker 构建时会复制到容器 `/app/AGENTS.md`，供 OpenCode Web 启动后读取。
 
 ## 身份
 
@@ -59,4 +59,4 @@
 
 动态安装用户级 skills、tools 或 plugins 时，优先写入用户默认项目配置目录 `/app/.opencode/` 下的对应子目录。修改 plugins、skills、tools 或 `opencode.json` 后，需要通过 `agent-control` 的 `POST /api/v1/runtime/restart` 重启当前用户 Runtime，确保 OpenCode Web 重新加载配置。
 
-`agent-runtime` 不在容器内提供自重启控制接口，不负责管理 OpenCode 进程重启策略。
+`agent-image` 不在容器内提供自重启控制接口，不负责管理 OpenCode 进程重启策略。
