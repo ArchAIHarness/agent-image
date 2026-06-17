@@ -180,36 +180,55 @@ Runtime 不按 scene 创建，scene 不参与 Runtime Redis Key、Deployment、S
 
 ### 6.2 容器内目录契约
 
-真实部署时，`agent-master` 创建 Runtime Deployment，并按以下规则挂载：
+ 真实部署时，`agent-master` 创建 Runtime Deployment，并按以下规则挂载：
 
-```text
-{runtime.workdir}/{userId} -> /app
-{runtime.scenes.<scene>}/AGENTS.md -> /app/{scene}/AGENTS.md
-{runtime.scenes.<scene>}/.opencode -> /app/{scene}/.opencode
-```
+### 6.2 完整挂载映射
+
+`agent-master` 遵循三级持久化目录挂载约定，将用户工作目录、OpenCode 全局配置、全局数据和插件缓存分别挂载到容器对应路径：
+
+| 源路径 (NAS) | 容器内路径 | 用途 |
+|---|---|---|
+| `{runtime.workdir}/{userId}` | `/app` | 用户工作目录；根目录下 `AGENTS.md` 与 `.opencode/` 作为用户默认项目配置 |
+| `{runtime.workdir}/{userId}/.runtime/opencode/config` | `/root/.config/opencode` | OpenCode 用户级全局配置，包含 provider、model、credential 等配置 |
+| `{runtime.workdir}/{userId}/.runtime/opencode/data` | `/root/.local/share/opencode` | OpenCode 用户级全局数据，包含 `auth.json`、会话记录、索引缓存等 |
+| `{runtime.workdir}/{userId}/.runtime/opencode/cache` | `/root/.cache/opencode` | OpenCode 动态下载的 provider 包和插件缓存，避免每次重启重新下载 |
+| `{runtime.scenes.<scene>}/AGENTS.md` | `/app/{scene}/AGENTS.md` | 平台预设 scene 项目规则 |
+| `{runtime.scenes.<scene>}/.opencode` | `/app/{scene}/.opencode` | 平台预设 scene OpenCode 配置 |
 
 容器内最终形态：
 
 ```text
-/app/
-├── AGENTS.md
-├── .opencode/
-└── {scene}/
+/app/                          # 用户工作目录（覆盖镜像默认）
+├── AGENTS.md                  # 用户默认项目规则
+├── .opencode/                 # 用户默认项目级 OpenCode 配置
+│   ├── opencode.json
+│   ├── agents/
+│   ├── commands/
+│   ├── modes/
+│   ├── plugins/
+│   ├── skills/
+│   ├── tools/
+│   └── themes/
+└── {scene}/                   # 预设 scene 工作目录
     ├── AGENTS.md
     ├── .opencode/
-    └── ... 用户工作文件与运行产物
+    └── ... 用户工作文件
+
+/root/.config/opencode/        # OpenCode 用户级全局配置（来自 NAS 挂载）
+/root/.local/share/opencode/   # OpenCode 用户级全局数据（来自 NAS 挂载）
+/root/.cache/opencode/         # OpenCode 插件缓存（来自 NAS 挂载）
 ```
 
-### 6.3 用户默认配置
+### 6.3 用户默认项目配置
 
-用户默认项目配置来自用户根目录：
+用户默认项目配置存储在 NAS 用户根目录：
 
 ```text
 {runtime.workdir}/{userId}/AGENTS.md
 {runtime.workdir}/{userId}/.opencode/
 ```
 
-根挂载后自然成为：
+通过 `{runtime.workdir}/{userId} -> /app` 根挂载后，自然成为容器内：
 
 ```text
 /app/AGENTS.md
@@ -280,8 +299,9 @@ POST /session?directory=/app/coding
 
 ### 6.6 动态能力安装与重启
 
-动态安装用户级 skills / tools / plugins 时，推荐写入用户默认项目配置目录：
+动态安装用户级能力分两类路径：
 
+**项目级能力（skills/tools/plugins）写入用户工作目录配置：**
 ```text
 {runtime.workdir}/{userId}/.opencode/skills/
 {runtime.workdir}/{userId}/.opencode/tools/
@@ -289,11 +309,15 @@ POST /session?directory=/app/coding
 ```
 
 容器内对应：
-
 ```text
 /app/.opencode/skills/
 /app/.opencode/tools/
 /app/.opencode/plugins/
+```
+
+**全局 OpenCode 能力（provider 包等）由 OpenCode 自行管理到缓存目录：**
+```text
+{runtime.workdir}/{userId}/.runtime/opencode/cache/ -> /root/.cache/opencode/
 ```
 
 OpenCode Web 需要重启后才能稳定重新加载项目级配置。重启由 `agent-master` 提供的当前用户 Runtime 重启接口完成：
